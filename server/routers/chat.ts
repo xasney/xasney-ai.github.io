@@ -8,6 +8,7 @@ import {
   getChatMessages,
 } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { streamLLMResponse, collectStreamedResponse } from "../_core/llmStreaming";
 
 type RoleType = "researcher" | "creator" | "critic" | "optimizer";
 
@@ -44,7 +45,7 @@ export const chatRouter = router({
       return await getChatMessages(input.sessionId);
     }),
 
-  // Send a user message and get AI responses from all roles
+  // Send a user message and get AI responses from all roles (non-streaming)
   sendMessage: protectedProcedure
     .input(z.object({ sessionId: z.number(), content: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -66,13 +67,12 @@ export const chatRouter = router({
       for (const role of roles) {
         try {
           const systemPrompt = ROLE_PROMPTS[role];
-          
+
           // Build context from previous messages
-          const contextMessages = allMessages
-            .map(m => ({
-              role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-              content: m.content,
-            }));
+          const contextMessages = allMessages.map((m) => ({
+            role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+            content: m.content,
+          }));
 
           const response = await invokeLLM({
             messages: [
@@ -88,6 +88,56 @@ export const chatRouter = router({
 
           await addChatMessage(input.sessionId, role, responseContent);
           responses.push({ role, content: responseContent });
+        } catch (error) {
+          console.error(`Error generating response for ${role}:`, error);
+          const errorMessage = `[Fehler bei der Generierung der ${role}-Antwort]`;
+          await addChatMessage(input.sessionId, role, errorMessage);
+          responses.push({ role, content: errorMessage });
+        }
+      }
+
+      return responses;
+    }),
+
+  // Send a user message with streaming responses
+  sendMessageStreaming: protectedProcedure
+    .input(z.object({ sessionId: z.number(), content: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const session = await getChatSession(input.sessionId);
+      if (!session || session.userId !== ctx.user!.id) {
+        throw new Error("Unauthorized");
+      }
+
+      // Add user message
+      await addChatMessage(input.sessionId, "user", input.content);
+
+      // Get all messages for context
+      const allMessages = await getChatMessages(input.sessionId);
+
+      // Generate responses from each role with streaming
+      const roles: RoleType[] = ["researcher", "creator", "critic", "optimizer"];
+      const responses = [];
+
+      for (const role of roles) {
+        try {
+          const systemPrompt = ROLE_PROMPTS[role];
+
+          // Build context from previous messages
+          const contextMessages = allMessages.map((m) => ({
+            role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+            content: m.content,
+          }));
+
+          // Stream the response
+          const generator = streamLLMResponse([
+            { role: "system", content: systemPrompt },
+            ...contextMessages,
+          ]);
+
+          const completeResponse = await collectStreamedResponse(generator);
+
+          await addChatMessage(input.sessionId, role, completeResponse);
+          responses.push({ role, content: completeResponse });
         } catch (error) {
           console.error(`Error generating response for ${role}:`, error);
           const errorMessage = `[Fehler bei der Generierung der ${role}-Antwort]`;

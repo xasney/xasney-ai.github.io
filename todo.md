@@ -46,3 +46,15 @@
 - [x] Chat-UI-Komponente mit Nachrichten-Stream
 - [x] Rollen-spezifische Prompts für LLM
 - [x] Chat-Tests schreiben und ausführen
+
+
+## Phase 7: Streaming-Feature für Rollen-Antworten
+- [x] Backend: SSE-Endpoint für Streaming-Antworten implementieren
+- [x] LLM-Streaming mit progressiven Tokens integrieren
+- [x] Frontend: EventSource für SSE-Verbindung nutzen
+- [x] Chat-UI für progressive Nachrichten-Anzeige aktualisieren
+- [x] Loading-States und Fehlerbehandlung für Streaming
+- [x] Streaming-Tests schreiben (9 Tests gesamt - alle bestanden)
+- [x] Express-Route für SSE-Streaming registrieren
+- [x] Frontend SSE-Reader implementiert
+- [x] Fehlerbehandlung mit Toast-Benachrichtigungen

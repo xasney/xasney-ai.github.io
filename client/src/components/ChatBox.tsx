@@ -1,14 +1,16 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, AlertCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 
 interface Message {
   id: number;
   role: "user" | "researcher" | "creator" | "critic" | "optimizer";
   content: string;
   createdAt: Date;
+  isStreaming?: boolean;
 }
 
 const ROLE_COLORS: Record<string, { bg: string; text: string; emoji: string }> = {
@@ -35,10 +37,11 @@ export function ChatBox({ sessionId }: ChatBoxProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [streamingRoles, setStreamingRoles] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const getMessagesQuery = trpc.chat.getMessages.useQuery({ sessionId });
-  const sendMessageMutation = trpc.chat.sendMessage.useMutation();
 
   // Load messages on mount
   useEffect(() => {
@@ -55,7 +58,7 @@ export function ChatBox({ sessionId }: ChatBoxProps) {
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, streamingRoles]);
 
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -63,19 +66,117 @@ export function ChatBox({ sessionId }: ChatBoxProps) {
     const userMessage = input;
     setInput("");
     setIsLoading(true);
+    setError(null);
+    setStreamingRoles(new Set(["researcher", "creator", "critic", "optimizer"]));
 
     try {
-      const response = await sendMessageMutation.mutateAsync({
-        sessionId,
+      // Add user message immediately
+      const userMsg: Message = {
+        id: Date.now(),
+        role: "user",
         content: userMessage,
+        createdAt: new Date(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+
+      // Connect to SSE endpoint
+      const response = await fetch("/api/streaming/chat/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          content: userMessage,
+        }),
       });
 
-      // Refresh messages
-      await getMessagesQuery.refetch();
-    } catch (error) {
-      console.error("Error sending message:", error);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error("No response body");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const roleMessages: Record<string, string> = {};
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines[lines.length - 1];
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i];
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6));
+
+              if (event.type === "role_start") {
+                // Initialize role message
+                roleMessages[event.role] = "";
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: Date.now() + Math.random(),
+                    role: event.role,
+                    content: "",
+                    createdAt: new Date(),
+                    isStreaming: true,
+                  },
+                ]);
+              } else if (event.type === "token") {
+                // Append token to role message
+                roleMessages[event.role] = (roleMessages[event.role] || "") + event.token;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.role === event.role && m.isStreaming
+                      ? { ...m, content: roleMessages[event.role] }
+                      : m
+                  )
+                );
+              } else if (event.type === "role_complete") {
+                // Mark role as done streaming
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.role === event.role && m.isStreaming
+                      ? { ...m, isStreaming: false }
+                      : m
+                  )
+                );
+                setStreamingRoles((prev) => {
+                  const next = new Set(prev);
+                  next.delete(event.role);
+                  return next;
+                });
+              } else if (event.type === "error") {
+                console.error(`Error from ${event.role}:`, event.message);
+                toast.error(`Fehler bei ${ROLE_NAMES[event.role]}: ${event.message}`);
+              } else if (event.type === "complete") {
+                // All roles done
+                setIsLoading(false);
+                await getMessagesQuery.refetch();
+              }
+            } catch (parseError) {
+              console.error("Failed to parse SSE event:", parseError);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unbekannter Fehler";
+      setError(errorMsg);
+      toast.error(`Fehler beim Senden der Nachricht: ${errorMsg}`);
+      console.error("Error sending message:", err);
     } finally {
       setIsLoading(false);
+      setStreamingRoles(new Set());
     }
   };
 
@@ -92,16 +193,32 @@ export function ChatBox({ sessionId }: ChatBoxProps) {
             const roleStyle = ROLE_COLORS[message.role] || ROLE_COLORS.user;
             return (
               <div key={message.id} className="flex gap-3 animate-fadeIn">
-                <div className={`flex-shrink-0 w-10 h-10 rounded-lg ${roleStyle.bg} flex items-center justify-center`}>
+                <div
+                  className={`flex-shrink-0 w-10 h-10 rounded-lg ${roleStyle.bg} flex items-center justify-center ${
+                    message.isStreaming ? "animate-pulse" : ""
+                  }`}
+                >
                   <span className="text-lg">{roleStyle.emoji}</span>
                 </div>
                 <div className="flex-1">
                   <p className={`text-sm font-semibold ${roleStyle.text} mb-1`}>
                     {ROLE_NAMES[message.role]}
+                    {message.isStreaming && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        (Schreiben...)
+                      </span>
+                    )}
                   </p>
-                  <div className={`p-4 rounded-lg ${roleStyle.bg} border border-${message.role === 'user' ? 'primary' : 'secondary'}/30`}>
+                  <div
+                    className={`p-4 rounded-lg ${roleStyle.bg} border border-${
+                      message.role === "user" ? "primary" : "secondary"
+                    }/30`}
+                  >
                     <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
                       {message.content}
+                      {message.isStreaming && (
+                        <span className="animate-blink">▌</span>
+                      )}
                     </p>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
@@ -111,6 +228,15 @@ export function ChatBox({ sessionId }: ChatBoxProps) {
               </div>
             );
           })
+        )}
+        {error && (
+          <div className="flex gap-3 p-4 bg-red-900/20 border border-red-500/30 rounded-lg">
+            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-400">Fehler</p>
+              <p className="text-xs text-red-300 mt-1">{error}</p>
+            </div>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>
