@@ -360,6 +360,15 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Chat Button */}
+        <section className="mb-16">
+          <a href="/chat">
+            <Button className="w-full py-6 text-lg font-bold bg-secondary hover:bg-secondary/90 text-secondary-foreground neon-cyan">
+              💬 Starten Sie ein KI-Meeting
+            </Button>
+          </a>
+        </section>
+
         {/* Settings Panel */}
         {showSettings && (
           <section className="mb-16">

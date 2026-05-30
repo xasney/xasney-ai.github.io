@@ -37,3 +37,12 @@
 ## Zusätzliche Komponenten
 - [x] RoleDetailCard-Komponente erstellt
 - [x] Auth-Tests (auth.me.test.ts, auth.logout.test.ts) geschrieben und bestanden
+
+
+## Phase 6: Chat-Feature mit KI-Rollen
+- [x] Datenbank-Schema für Chat-Nachrichten erweitern
+- [x] Backend-Routen für Chat-Nachrichten (create, list)
+- [x] LLM-Integration für Rollen-Antworten
+- [x] Chat-UI-Komponente mit Nachrichten-Stream
+- [x] Rollen-spezifische Prompts für LLM
+- [x] Chat-Tests schreiben und ausführen
